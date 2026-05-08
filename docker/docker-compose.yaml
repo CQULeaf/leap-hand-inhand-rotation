@@ -1,0 +1,33 @@
+x-default-leap-hand-environment: &default-leap-hand-environment
+  - OMNI_KIT_ALLOW_ROOT=1
+
+x-default-leap-hand-deploy: &default-leap-hand-deploy
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          count: all
+          capabilities: [ gpu ]
+
+services:
+  leap-hand-inhand-rotation:
+    env_file: .env.base
+    build:
+      context: ../
+      dockerfile: docker/Dockerfile
+      args:
+        - ISAACLAB_BASE_IMAGE_ARG=${ISAACLAB_BASE_IMAGE}
+        - DOCKER_LEAP_HAND_PROJECT_PATH_ARG=${DOCKER_LEAP_HAND_PROJECT_PATH}
+    image: leap-hand-inhand-rotation
+    container_name: leap-hand-inhand-rotation
+    volumes:
+      - type: bind
+        source: ../
+        target: ${DOCKER_LEAP_HAND_PROJECT_PATH}
+    network_mode: host
+    environment: *default-leap-hand-environment
+    deploy: *default-leap-hand-deploy
+    # This is the entrypoint for the container
+    entrypoint: bash
+    stdin_open: true
+    tty: true

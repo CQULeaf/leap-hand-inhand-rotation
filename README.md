@@ -1,43 +1,19 @@
 # 基于深度强化学习的 LEAP Hand 手内旋转系统
 
-基于 Isaac Lab 的 LEAP Hand 手内圆柱旋转强化学习项目。仓库实现了 HORA 风格的两阶段策略学习流程：先训练带特权信息的仿真 teacher policy，再训练只依赖本体感知历史的可部署 student policy。
-
-本仓库面向仿真实验复现、定量评估和谨慎的真实硬件部署整理。
+该仓库实现了 HORA 风格的两阶段策略学习流程：先训练带特权信息的仿真 teacher policy，再训练只依赖本体感知历史的可部署 student policy。项目打通了“任务建模——仿真训练——实机部署”整个流程，本仓库开源所有相关代码，可用于仿真实验复现、定量评估和真实硬件部署。
 
 ## 项目亮点
 
-- 基于 Isaac Lab `DirectRLEnv` 的 LEAP Hand 圆柱旋转任务。
-- HORA 风格两阶段学习：privileged teacher + proprioceptive adaptation。
-- 提供预训练 Stage1 / Stage2 checkpoint，可直接播放和评估。
-- 提供 `fixed`、`id`、`ood` 评估 preset，并导出 `episodes.csv` 与 `summary.json`。
-- 注册了 object pose、CoM、dynamics、PD randomization、observation noise、wide CoM 等任务变体，便于消融实验。
-- 训练、评估、播放、TensorBoard、资产检查和部署入口都封装在 `scripts/` 下。
-
-## 方法概览
-
-```text
-Stage1 teacher
-  policy obs: 3 帧 joint/action-target 历史
-  privileged state: object pose, scale, mass, friction, CoM
-  output: action + teacher latent
-
-Stage2 student
-  input: 30 帧本体感知 joint/action-target 历史
-  target: teacher latent，可选 teacher action consistency
-  output: 不依赖 privileged state 的部署策略
-```
-
-默认维度：
-
-- Stage1 policy observation：`96 = 3 * (16 joint_pos + 16 action_target)`
-- Privileged state：`9 = object_pos(3) + scale + mass + friction + CoM(3)`
-- Stage2 proprioceptive history：`30 * 32`
-- Action space：`16` 个 LEAP Hand 关节
+1. 面向低成本 LEAP Hand，在无视觉、无触觉反馈条件下完成圆柱体连续手内旋转的仿真训练、统一评测和真实硬件闭环部署。
+2. 将 HORA/RMA 类两阶段适应思路改造为适用于 LEAP 平台的 `8` 维技能先验：训练期使用对象位置、尺度、质量、摩擦和质心偏移等特权信息，部署期只依赖关节本体历史恢复同一先验。
+3. 针对部署策略在 OOD 圆柱参数下的退化，引入 teacher-student action consistency，并扩大质心偏移覆盖范围；论文实验中 Deploy-Refined 将 OOD success 从 `0.8750` 提升到 `0.9141`，存活时间、净旋转圈数和轴向角速度同步改善。
+4. 评测链路覆盖 Teacher、Deploy-Base、Deploy-Refined 三类策略，包含 ID/OOD 对比、特权信息消融、历史长度消融、编码器结构消融和动作一致性权重分析。
+5. 同一 Deploy-Refined 策略可在真实 LEAP Hand 上闭环运行，并在标准圆柱、尺寸变化圆柱和细高近圆柱物体上产生可重复的低速受控旋转。结论范围限定在圆柱参数泛化和少量近圆柱对象迁移。
 
 ## 仓库结构
 
 ```text
-pretrained/                 # 发布用 Stage1 / Stage2 checkpoint
+pretrained/                 # 提供训练好的 Stage1 / Stage2 checkpoint
 scripts/
   train/                    # Stage1 与 Stage2 训练入口
   eval/                     # 策略播放与定量评估
@@ -49,27 +25,21 @@ source/LEAP_Isaaclab/
   LEAP_Isaaclab/tasks/      # 任务注册、配置和 DirectRLEnv 实现
   LEAP_Isaaclab/utils/      # HORA adaptation、rl_games 工具、观测处理
   LEAP_Isaaclab/deployment_scripts/
-                             # Stage2 policy wrapper 与 Dynamixel 控制器
-docker/                     # 可选 Isaac Lab 容器入口
+                            # Stage2 policy wrapper 与 Dynamixel 控制器
+docker/                     # Isaac Lab 容器入口
 ```
-
-核心文件：
-
-- `source/LEAP_Isaaclab/LEAP_Isaaclab/tasks/leap_hand_cylinder_rotation/leap_hand_env_cfg.py`
-- `source/LEAP_Isaaclab/LEAP_Isaaclab/tasks/leap_hand_cylinder_rotation/cylinder_rotation_env.py`
-- `source/LEAP_Isaaclab/LEAP_Isaaclab/utils/hora_adaptation.py`
-- `scripts/eval/evaluate_policy.py`
-- `source/LEAP_Isaaclab/LEAP_Isaaclab/deployment_scripts/cylinder_rotation_stage2.py`
 
 ## 环境要求
 
-本地验证环境：
+项目所用环境：
 
 - Ubuntu 22.04
 - NVIDIA GPU
-- Isaac Sim / Isaac Lab 可用环境
+- Isaac Sim `5.1.0.0`
+- Isaac Lab `0.54.3`
+- `isaaclab_tasks 0.11.14`、`isaaclab_assets 0.2.4`、`isaaclab_rl 0.5.0`
 - Conda 环境名：`env_isaaclab`
-- Isaac Lab 环境内 Python 3.11
+- Isaac Lab 环境内 Python `3.11.15`
 
 脚本默认会尝试激活 `env_isaaclab`。如果当前 shell 没有 `conda` 命令，脚本会尝试加载 `/home/tools/anaconda3/etc/profile.d/conda.sh`。
 
@@ -158,32 +128,10 @@ python3 scripts/tools/summarize_evaluations.py \
 
 ## 训练
 
-Stage1 teacher smoke test：
-
-```bash
-bash scripts/train/stage1.sh \
-  --profile debug \
-  --num-envs 64 \
-  --max-iterations 2 \
-  --run-name smoke_stage1
-```
-
 Stage1 本地训练入口：
 
 ```bash
 bash scripts/train/stage1.sh --profile local-5060
-```
-
-Stage2 student smoke test。默认使用 `pretrained/stage1_teacher.pth` 作为 Stage1 teacher：
-
-```bash
-bash scripts/train/stage2.sh \
-  --profile debug \
-  --num-envs 4 \
-  --max-steps 16 \
-  --save-every 16 \
-  --log-every 8 \
-  --run-name smoke_stage2
 ```
 
 Stage2 本地训练入口：
@@ -214,7 +162,7 @@ logs/hora_stage2/leap_hand_cylinder_rotation/<stage2-run>/
 - `mean_latent_mse_mean`：Stage2 student latent 与 teacher latent 的误差。
 - `mean_teacher_student_action_l2_mean`：Stage2 action 与 teacher action 的差距。
 
-代表性论文实验结果：
+论文中的实验结果：
 
 | Policy | Preset | Success | Survival | Turns | Spin | LinVel cm/s | Torque |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -225,7 +173,7 @@ logs/hora_stage2/leap_hand_cylinder_rotation/<stage2-run>/
 | Deploy-Base | OOD | 0.8750 | 0.9492 | 3.0422 | 0.9803 | 4.4935 | 2.4433 |
 | Deploy-Refined | OOD | 0.9141 | 0.9758 | 3.2558 | 1.0420 | 4.2818 | 2.4087 |
 
-Deploy-Refined 结合了更宽的 CoM 覆盖和 teacher-action consistency。在报告的 OOD 设置中，它相对 Deploy-Base 将成功率从 `0.8750` 提升到 `0.9141`。
+Deploy-Refined 结合了更宽的 CoM 覆盖和 teacher-action consistency。在 OOD 设置中，它相对 Deploy-Base 将成功率从 `0.8750` 提升到 `0.9141`。
 
 ## 真实硬件部署
 
@@ -268,34 +216,3 @@ bash scripts/deploy/real_trial.sh \
 ```
 
 注意：`--dry-run` 仍会打开串口并读取电机状态，它不是离线 inference-only 模式。
-
-## 开发检查
-
-```bash
-python3 scripts/tools/check_assets.py
-find scripts -name '*.sh' -print0 | xargs -0 bash -n
-python3 -m py_compile \
-  scripts/tools/check_assets.py \
-  scripts/tools/generate_grasp_cache.py \
-  scripts/tools/summarize_evaluations.py \
-  scripts/tools/list_tasks.py \
-  scripts/eval/evaluate_policy.py \
-  scripts/internal/hora_play_stage2.py \
-  scripts/internal/hora_train_stage2.py \
-  scripts/internal/rl_games_play.py \
-  scripts/internal/rl_games_train.py
-```
-
-TensorBoard：
-
-```bash
-bash scripts/tools/tensorboard_stage1.sh
-bash scripts/tools/tensorboard_stage2.sh
-```
-
-## 当前状态
-
-- 仿真任务、训练脚本、评估脚本和资产检查脚本已整理完成。
-- 预训练 Stage1 / Stage2 checkpoint 已放入 `pretrained/`。
-- 真实硬件部署入口已保留，但执行前必须做明确的硬件安全检查。
-- 论文和项目主页公开后，可在 README 中补充链接。

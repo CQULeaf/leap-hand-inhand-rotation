@@ -31,7 +31,6 @@ HOST="127.0.0.1"
 PORT="6006"
 CONDA_ENV_NAME="env_isaaclab"
 RELOAD_INTERVAL="5"
-LEDGER_DOC="${PROJECT_ROOT}/docs/总览/实验结果台账与目录规范.md"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -101,7 +100,6 @@ fi
 
 echo "[INFO] TensorBoard logdir: ${LOGDIR}"
 echo "[INFO] Open: http://${HOST}:${PORT}"
-echo "[INFO] Result ledger: ${LEDGER_DOC}"
 
 exec python -m tensorboard.main \
     --logdir "${LOGDIR}" \

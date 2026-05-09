@@ -26,6 +26,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SOURCE_ROOT="${PROJECT_ROOT}/source/LEAP_Isaaclab"
 DEFAULT_STAGE1_CFG="${SOURCE_ROOT}/LEAP_Isaaclab/tasks/leap_hand_cylinder_rotation/agents/rl_games_ppo_cfg.yaml"
 STAGE2_LOG_ROOT="${PROJECT_ROOT}/logs/hora_stage2/leap_hand_cylinder_rotation"
+PRETRAINED_STAGE2_CHECKPOINT="${PROJECT_ROOT}/pretrained/stage2_deploy_refined.pt"
 
 TASK="Isaac-CylinderRotation-Leap"
 NUM_ENVS="1"
@@ -111,14 +112,16 @@ fi
 if [[ -z "${CHECKPOINT}" ]]; then
     if [[ "${USE_LAST_CHECKPOINT}" -eq 1 ]]; then
         CHECKPOINT="$(auto_find_stage2_checkpoint '*/nn/model_last.pt')"
+    elif [[ -f "${PRETRAINED_STAGE2_CHECKPOINT}" ]]; then
+        CHECKPOINT="${PRETRAINED_STAGE2_CHECKPOINT}"
     else
         CHECKPOINT="$(auto_find_stage2_checkpoint '*/nn/model_best.pt')"
     fi
 fi
 
 if [[ -z "${CHECKPOINT}" ]]; then
-    echo "[ERROR] Could not auto-detect a stage2 checkpoint under ${STAGE2_LOG_ROOT}" >&2
-    echo "        Please pass --checkpoint /abs/path/to/model_best.pt" >&2
+    echo "[ERROR] Could not auto-detect a stage2 checkpoint from ${PRETRAINED_STAGE2_CHECKPOINT} or ${STAGE2_LOG_ROOT}" >&2
+    echo "        Please pass --checkpoint pretrained/stage2_deploy_refined.pt" >&2
     exit 1
 fi
 

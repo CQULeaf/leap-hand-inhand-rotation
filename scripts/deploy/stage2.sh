@@ -40,7 +40,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SOURCE_ROOT="${PROJECT_ROOT}/source/LEAP_Isaaclab"
 DEFAULT_STAGE1_CFG="${SOURCE_ROOT}/LEAP_Isaaclab/tasks/leap_hand_cylinder_rotation/agents/rl_games_ppo_cfg.yaml"
 STAGE2_LOG_ROOT="${PROJECT_ROOT}/logs/hora_stage2/leap_hand_cylinder_rotation"
-PREFERRED_DEPLOY_REFINED_CHECKPOINT="${STAGE2_LOG_ROOT}/stage2_orig_teacher_comwide_actloss1_2026-04-16/nn/model_best.pt"
+PREFERRED_DEPLOY_REFINED_CHECKPOINT="${PROJECT_ROOT}/pretrained/stage2_deploy_refined.pt"
 
 CHECKPOINT=""
 USE_LAST_CHECKPOINT=0
@@ -206,7 +206,8 @@ fi
 
 if [[ -z "${CHECKPOINT}" ]]; then
     echo "[ERROR] Could not auto-detect a stage2 checkpoint under ${STAGE2_LOG_ROOT}" >&2
-    echo "        Please pass --checkpoint /abs/path/to/model_best.pt" >&2
+    echo "        Preferred pretrained checkpoint: ${PREFERRED_DEPLOY_REFINED_CHECKPOINT}" >&2
+    echo "        Please pass --checkpoint pretrained/stage2_deploy_refined.pt" >&2
     exit 1
 fi
 

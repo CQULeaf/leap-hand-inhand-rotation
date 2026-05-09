@@ -38,6 +38,8 @@ SOURCE_ROOT="${PROJECT_ROOT}/source/LEAP_Isaaclab"
 DEFAULT_STAGE1_CFG="${SOURCE_ROOT}/LEAP_Isaaclab/tasks/leap_hand_cylinder_rotation/agents/rl_games_ppo_cfg.yaml"
 STAGE1_LOG_ROOT="${PROJECT_ROOT}/logs/rl_games/leap_hand_cylinder_rotation"
 STAGE2_LOG_ROOT="${PROJECT_ROOT}/logs/hora_stage2/leap_hand_cylinder_rotation"
+PRETRAINED_STAGE1_CHECKPOINT="${PROJECT_ROOT}/pretrained/stage1_teacher.pth"
+PRETRAINED_STAGE2_CHECKPOINT="${PROJECT_ROOT}/pretrained/stage2_deploy_refined.pt"
 
 POLICY_TYPE=""
 EVAL_PRESET="id"
@@ -65,6 +67,10 @@ EXTRA_ARGS=()
 auto_find_stage1_checkpoint() {
     local latest_best=""
     local latest_last=""
+    if [[ -f "${PRETRAINED_STAGE1_CHECKPOINT}" ]]; then
+        printf '%s\n' "${PRETRAINED_STAGE1_CHECKPOINT}"
+        return 0
+    fi
     latest_best="$(find "${STAGE1_LOG_ROOT}" -type f -path '*/nn/leap_hand_cylinder_rotation.pth' 2>/dev/null | sort | tail -n 1 || true)"
     latest_last="$(find "${STAGE1_LOG_ROOT}" -type f -path '*/nn/last_*.pth' 2>/dev/null | sort | tail -n 1 || true)"
     if [[ -n "${latest_best}" ]]; then
@@ -81,6 +87,10 @@ auto_find_stage1_checkpoint() {
 auto_find_stage2_checkpoint() {
     local latest_best=""
     local latest_last=""
+    if [[ -f "${PRETRAINED_STAGE2_CHECKPOINT}" ]]; then
+        printf '%s\n' "${PRETRAINED_STAGE2_CHECKPOINT}"
+        return 0
+    fi
     latest_best="$(find "${STAGE2_LOG_ROOT}" -type f -path '*/nn/model_best.pt' 2>/dev/null | sort | tail -n 1 || true)"
     latest_last="$(find "${STAGE2_LOG_ROOT}" -type f -path '*/nn/model_last.pt' 2>/dev/null | sort | tail -n 1 || true)"
     if [[ -n "${latest_best}" ]]; then
@@ -218,14 +228,14 @@ fi
 
 if [[ "${POLICY_TYPE}" == "stage1" && -z "${STAGE1_CHECKPOINT}" ]]; then
     if ! STAGE1_CHECKPOINT="$(auto_find_stage1_checkpoint)"; then
-        echo "[ERROR] Could not auto-detect a stage1 checkpoint under ${STAGE1_LOG_ROOT}" >&2
+        echo "[ERROR] Could not auto-detect a stage1 checkpoint from ${PRETRAINED_STAGE1_CHECKPOINT} or ${STAGE1_LOG_ROOT}" >&2
         exit 1
     fi
 fi
 
 if [[ "${POLICY_TYPE}" == "stage2" && -z "${STAGE2_CHECKPOINT}" ]]; then
     if ! STAGE2_CHECKPOINT="$(auto_find_stage2_checkpoint)"; then
-        echo "[ERROR] Could not auto-detect a stage2 checkpoint under ${STAGE2_LOG_ROOT}" >&2
+        echo "[ERROR] Could not auto-detect a stage2 checkpoint from ${PRETRAINED_STAGE2_CHECKPOINT} or ${STAGE2_LOG_ROOT}" >&2
         exit 1
     fi
 fi

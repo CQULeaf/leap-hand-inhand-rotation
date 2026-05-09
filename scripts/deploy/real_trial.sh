@@ -3,7 +3,7 @@ set -u
 
 print_help() {
     cat <<'HELP'
-Usage: deploy_real_trial.sh [OPTIONS]
+Usage: bash scripts/deploy/real_trial.sh [OPTIONS]
 
 Run one real-world Stage2 deployment trial and append metadata to a CSV table.
 
@@ -28,7 +28,7 @@ Trial outcome metadata, can be filled before or edited after the trial:
   --notes TEXT                Notes. Default: empty
 
 Deployment parameters:
-  --checkpoint PATH           Stage2 checkpoint path. Default: Deploy-Refined model_best.pt
+  --checkpoint PATH           Stage2 checkpoint path. Default: pretrained/stage2_deploy_refined.pt
   --port PATH                 Serial port. Default: /dev/ttyUSB0
   --hz N                      Control frequency. Default: 30
   --warmup-mode MODE          Warmup mode. Default: analytic
@@ -60,7 +60,7 @@ if [[ -z "${PYTHON_BIN}" ]]; then
     fi
 fi
 
-CHECKPOINT="logs/hora_stage2/leap_hand_cylinder_rotation/stage2_orig_teacher_comwide_actloss1_2026-04-16/nn/model_best.pt"
+CHECKPOINT="pretrained/stage2_deploy_refined.pt"
 PORT="/dev/ttyUSB0"
 HZ="30"
 WARMUP_MODE="analytic"
@@ -161,7 +161,7 @@ START_TIME="$(date --iso-8601=seconds)"
 START_EPOCH="$(date +%s)"
 
 set +e
-./scripts/deploy/stage2.sh \
+bash scripts/deploy/stage2.sh \
     --checkpoint "${CHECKPOINT}" \
     --port "${PORT}" \
     --hz "${HZ}" \

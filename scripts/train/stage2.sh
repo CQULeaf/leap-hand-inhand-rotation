@@ -10,7 +10,7 @@ Options:
   --profile NAME             Training preset: local-5060, cloud-4090, debug
                              Default: local-5060
   --task TASK                Gym task name. Default: Isaac-CylinderRotation-Leap
-  --stage1-checkpoint PATH   Stage1 checkpoint path. Default: auto-detect latest best stage1 checkpoint
+  --stage1-checkpoint PATH   Stage1 checkpoint path. Default: pretrained/stage1_teacher.pth, then latest logs
   --stage2-checkpoint PATH   Optional stage2 checkpoint path for fine-tuning / resume
   --stage1-cfg PATH          Stage1 rl_games yaml path. Default: cylinder rotation rl_games_ppo_cfg.yaml
   --num-envs N               Number of parallel environments. Default depends on profile
@@ -34,7 +34,7 @@ Options:
 Examples:
   ./scripts/train/stage2.sh
   ./scripts/train/stage2.sh --profile debug
-  ./scripts/train/stage2.sh --stage1-checkpoint /abs/path/to/stage1.pth
+  ./scripts/train/stage2.sh --stage1-checkpoint pretrained/stage1_teacher.pth
 EOF
 }
 
@@ -43,6 +43,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SOURCE_ROOT="${PROJECT_ROOT}/source/LEAP_Isaaclab"
 DEFAULT_STAGE1_CFG="${SOURCE_ROOT}/LEAP_Isaaclab/tasks/leap_hand_cylinder_rotation/agents/rl_games_ppo_cfg.yaml"
 STAGE1_LOG_ROOT="${PROJECT_ROOT}/logs/rl_games/leap_hand_cylinder_rotation"
+PRETRAINED_STAGE1_CHECKPOINT="${PROJECT_ROOT}/pretrained/stage1_teacher.pth"
 
 TASK="Isaac-CylinderRotation-Leap"
 PROFILE="local-5060"
@@ -94,6 +95,11 @@ apply_profile_defaults() {
 auto_find_stage1_checkpoint() {
     local latest_best=""
     local latest_last=""
+
+    if [[ -f "${PRETRAINED_STAGE1_CHECKPOINT}" ]]; then
+        printf '%s\n' "${PRETRAINED_STAGE1_CHECKPOINT}"
+        return 0
+    fi
 
     latest_best="$(find "${STAGE1_LOG_ROOT}" -type f -path '*/nn/leap_hand_cylinder_rotation.pth' 2>/dev/null | sort | tail -n 1 || true)"
     latest_last="$(find "${STAGE1_LOG_ROOT}" -type f -path '*/nn/last_*.pth' 2>/dev/null | sort | tail -n 1 || true)"
@@ -230,8 +236,8 @@ fi
 
 if [[ -z "${STAGE1_CHECKPOINT}" ]]; then
     if ! STAGE1_CHECKPOINT="$(auto_find_stage1_checkpoint)"; then
-        echo "[ERROR] Could not auto-detect a stage1 checkpoint under ${STAGE1_LOG_ROOT}" >&2
-        echo "        Please pass --stage1-checkpoint /abs/path/to/stage1.pth" >&2
+        echo "[ERROR] Could not auto-detect a stage1 checkpoint from ${PRETRAINED_STAGE1_CHECKPOINT} or ${STAGE1_LOG_ROOT}" >&2
+        echo "        Please pass --stage1-checkpoint pretrained/stage1_teacher.pth" >&2
         exit 1
     fi
 fi

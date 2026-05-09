@@ -26,6 +26,7 @@ EOF
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SOURCE_ROOT="${PROJECT_ROOT}/source/LEAP_Isaaclab"
+PRETRAINED_STAGE1_CHECKPOINT="${PROJECT_ROOT}/pretrained/stage1_teacher.pth"
 
 TASK="Isaac-CylinderRotation-Leap"
 NUM_ENVS="1"
@@ -137,6 +138,10 @@ CMD=(
     --device "${DEVICE}"
 )
 
+if [[ -z "${CHECKPOINT}" && "${USE_LAST_CHECKPOINT}" -eq 0 && -f "${PRETRAINED_STAGE1_CHECKPOINT}" ]]; then
+    CHECKPOINT="${PRETRAINED_STAGE1_CHECKPOINT}"
+fi
+
 if [[ -n "${CHECKPOINT}" ]]; then
     CMD+=(--checkpoint "${CHECKPOINT}")
 elif [[ "${USE_LAST_CHECKPOINT}" -eq 1 ]]; then
@@ -168,6 +173,9 @@ if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
 fi
 
 echo "[INFO] Launch command:"
+if [[ -n "${CHECKPOINT}" ]]; then
+    echo "[INFO] Stage1 checkpoint: ${CHECKPOINT}"
+fi
 printf '  %q' "${CMD[@]}"
 printf '\n'
 

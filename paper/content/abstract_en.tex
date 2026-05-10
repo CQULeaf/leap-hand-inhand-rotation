@@ -1,0 +1,15 @@
+% 英文摘要
+\thesisfrontmatterpage{ABSTRACT}
+
+\addcontentsline{toc}{section}{ABSTRACT}
+\titleformat{\section}[block]{\centering\bfseries\fontspec{Times New Roman}\fontsize{16pt}{20pt}\selectfont}{\thesection}{1em}{}[]
+
+\section*{ABSTRACT}
+%ABSTRCT：Times New Roman 加粗三号，段前段后空一行
+\thesisbodyfont
+In-hand rotation requires the dexterous hand to continuously change its posture without re-grasping the object, which is a basic ability in fine operation. For the continuous rotation deployment of low-cost LEAP Hand under non-visual and non-tactile conditions, this paper establishes a cylinder continuous hand rotation task, reward function and unified evaluation protocol in Isaac Lab, and transforms the HORA / RMA two-stage adaptation idea into a \(8\) dimensional skill prior representation suitable for LEAP platform. In order to alleviate the degradation of the second-stage deployment strategy under the distributed outer cylinder parameters, this paper expands the coverage of centroid offset in training, and introduces the loss of teacher-deployment action consistency, and finally obtains the deployment strategy that only depends on the history of proprioception.\par
+In the simulation, the first-stage teacher strategy can maintain a stable continuous rotation of the cylinder in the \(20\,\mathrm{s}\) round. The enhanced \(\mathrm{Deploy\text{-}Refined}\) has a success rate of \(1.0000\) in the intra-distribution evaluation, and the success rate is increased from \(0.8750\) to \(0.9141\) in the conventional out-of-distribution evaluation. The survival time, the number of net rotations and the axial angular velocity are also improved simultaneously. Ablation experiments show that the motion consistency constraint contributes to the main gain of the second stage reinforcement, and the relaxation of the centroid offset distribution increases the coverage of high-risk samples. In the real machine test, the same strategy can run in a closed loop on the real LEAP Hand, and generate repeatable low-speed controlled rotation on standard cylinders, size-changing cylinders, and slender beverage bottles. The conclusion of this paper is limited to the generalization of cylinder parameters and the migration of a small number of near-cylinder objects. The stable rotation of any number of objects is still the goal of subsequent research.\par
+%英文摘要内容：Times New Roman 12磅（即小四号），行距20磅，段前段后0磅
+~\\
+\hspace*{2em}\textbf{Key words}: LEAP Hand; in-hand rotation; reinforcement learning; proprioceptive adaptation; sim-to-real\\
+%Keywords：Times New Roman 12磅，行距20磅， "key words" 两词加粗

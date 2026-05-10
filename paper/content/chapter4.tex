@@ -1,0 +1,428 @@
+% 第四章 实验与分析
+\thesischapterpage{4\quad 实验与分析}
+\section{实验与分析}
+
+\subsection{实验设置}
+\label{sec:chapter4_exp_setting}
+\thesisbodyfont
+本章围绕四个层面展开：先验证第三章提出的两阶段旋转框架能否在圆柱体连续手内旋转任务上形成稳定技能，再看仅依赖本体感觉历史的可部署策略能否在参数变化下保持性能，接着检验面向 OOD 风险设计的训练增强是否真的缓解退化，最后把同一策略放到真实 LEAP Hand 上，观察它在执行器响应、串口通信、接触摩擦和对象几何差异同时存在时能走到什么边界。
+
+本章的评测分为仿真训练与评测、实机部署与评估两部分。仿真侧在 Isaac Lab 中搭建 LEAP Hand 与圆柱体交互环境，任务命名为 \(\mathrm{Isaac\text{-}CylinderRotation\text{-}Leap}\)。该平台沿用 Orbit 等机器人学习框架在模块化任务建模和并行交互上的思路，便于统一组织训练、评测和部署配置\cite{orbit2023}。实机侧则直接使用 16 自由度 LEAP Hand，通过 Dynamixel 串口读取关节状态并发送目标位置命令，运行第二阶段得到的可部署策略。与仿真相比，真实部署还要逐项对齐观测构造、历史缓存、归一化统计量、动作尺度、关节限位和电机控制参数，同时面对执行器滞后、通信抖动以及接触物理差异带来的 Sim2Real 偏差。
+
+第二章已经给出了任务定义、观测空间、动作空间和奖励函数的数学表达式，这里则再进一步给出仿真训练时使用到的其它重要参数：仿真环境物理步频为 \(120\,\mathrm{Hz}\)，策略每 \(4\) 个物理步输出一次动作，对应约 \(30\,\mathrm{Hz}\) 的控制频率；动作尺度为 \(1/24\)，训练与评测统一采用 \(20\,\mathrm{s}\) 最大回合时长，正式评测每组统计 \(128\) 个回合。策略主干使用 \(3\) 帧短历史，历史编码器使用 \(30\) 帧本体感觉历史估计 \(8\) 维技能先验。奖励函数沿用第二章定义，具体参数设置为旋转奖励权重 \(\lambda_{\mathrm{rot}}=1.0\)，角速度投影截断范围为 \([-0.5,0.5]\)；姿态偏差、物体线速度、关节力矩、关节瞬时功率、动作幅值和中心偏移惩罚权重分别为 \(\lambda_q=0.1\)、\(\lambda_v=0.3\)、\(\lambda_{\tau}=0.0005\)、\(\lambda_w=0.001\)、\(\lambda_a=0.00005\) 和 \(\lambda_c=0.4\)，掉落判定阈值为 \(d_{\mathrm{fall}}=0.07\,\mathrm{m}\)。
+
+训练配置方面，第一阶段教师策略的网络结构与 PPO 主要超参数如表 \ref{tab:chapter4_stage1_training_hyperparams} 所示。特权信息编码器将 \(9\) 维特权信息映射为 \(8\) 维技能先验；动作主干和价值估计均为三层 MLP，隐藏层宽度依次为 \(512\)、\(256\)、\(128\)，激活函数为 ELU。策略标准差采用固定参数形式，动作均值在评测和部署侧均裁剪到 \([-1,1]\)。
+
+\begin{table}[htbp]
+    \centering
+    \zihao{5}
+    \caption{第一阶段网络结构与 PPO 训练超参数}
+    \label{tab:chapter4_stage1_training_hyperparams}
+    \setlength{\tabcolsep}{5pt}
+    \renewcommand{\arraystretch}{1.12}
+    \begin{tabular}{p{0.34\textwidth}p{0.60\textwidth}}
+        \toprule
+        项目 & 设置 \\
+        \midrule
+        并行环境数 & \(8192\) \\
+        策略观测/特权信息维度 & \(96 / 9\) \\
+        特权信息编码器 & \(\mathrm{MLP}(9,256,128,8)\)，输出经 \(\tanh\) 得到技能先验 \\
+        动作主干与价值网络 & \(\mathrm{MLP}(104,512,256,128)\)，ELU 激活，连续动作高斯策略 \\
+        策略方差 & 固定 log-std 参数，初始化为 \(-1.0\) \\
+        采样步长与小批量大小 & \(96\) 步，mini-batch 为 \(3072\) \\
+        PPO 更新轮数与最大迭代 & 每轮 \(5\) 个 mini-epoch，最大 \(5000\) 个 epoch \\
+        学习率与调度 & \(5\times10^{-5}\)，自适应学习率调度 \\
+        折扣因子与 GAE 参数 & \(\gamma=0.99,\ \tau=0.95\) \\
+        PPO 剪切系数与熵系数 & \(\epsilon=0.2,\ \lambda_H=0.0001\) \\
+        价值损失权重与梯度裁剪 & critic 系数 \(4\)，梯度范数上限 \(1.0\) \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+第二阶段训练冻结第一阶段动作主干，仅更新历史编码器。基础策略采用默认圆柱体参数分布和 \(\lambda_{\mathrm{act}}=0\)，增强策略在第二阶段中放宽质心偏移范围并采用 \(\lambda_{\mathrm{act}}=1.0\) 的动作一致性损失。第二阶段正式训练使用 \(4096\) 个并行环境，训练总环境步数约为 \(8\times10^6\)，历史编码器 Adam 学习率为 \(3\times10^{-4}\)。
+
+为定量评估策略对圆柱体物理属性变化的泛化性，本文将评测条件划分为分布内（In-Distribution, ID）与分布外（Out-of-Distribution, OOD）两类。ID 使用与训练一致的圆柱体参数范围；OOD 在保持对象类别仍为圆柱体的前提下，扩大尺度、质量、摩擦和质心偏移范围，用于检验策略在未见物理参数条件下的表现。具体参数范围如表 \ref{tab:chapter4_id_ood_ranges} 所示。
+
+\begin{table}[htbp]
+    \centering
+    \zihao{5}
+    \caption{ID 与 OOD 圆柱体参数范围}
+    \label{tab:chapter4_id_ood_ranges}
+    \begin{tabular}{p{0.25\textwidth}p{0.28\textwidth}p{0.28\textwidth}}
+        \toprule
+        参数 & ID 范围 & OOD 范围 \\
+        \midrule
+        尺度系数 & \([0.85,1.15]\) & \([0.80,1.20]\) \\
+        质量 & \([0.03,0.20]\,\mathrm{kg}\) & \([0.02,0.24]\,\mathrm{kg}\) \\
+        摩擦系数 & \([0.3,3.0]\) & \([0.2,3.5]\) \\
+        质心偏移 & \([-0.01,0.01]\,\mathrm{m}\) & \([-0.015,0.015]\,\mathrm{m}\) \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+第三章已经给出了 \(\mathrm{Teacher}\)、\(\mathrm{Deploy\text{-}Base}\) 和 \(\mathrm{Deploy\text{-}Refined}\) 的结构差异，本章评测沿用这一划分，重点比较两类差距：其一，\(\mathrm{Teacher}\) 与可部署策略之间的差距，用来衡量从特权信息先验切换到本体历史先验后带来的部署损失；其二，\(\mathrm{Deploy\text{-}Base}\) 与 \(\mathrm{Deploy\text{-}Refined}\) 之间的差距，用来判断动作一致性约束和更宽质心训练分布是否缓解常规圆柱体 OOD 条件下的退化。需要注意的是，\(\mathrm{Teacher}\) 只作为仿真参考上界，不对应真实部署；\(\mathrm{Deploy\text{-}Refined}\) 的质心训练范围与常规 OOD 评测范围相衔接，因此这里考察的是圆柱体参数外推中的补偿效果，而不是极端质心偏移或任意对象泛化问题的彻底解决。
+
+仿真评测的成功定义为回合未因掉落提前终止，且净旋转角达到至少一圈。本文评测结果均基于固定 checkpoint，在随机初始化的 \(128\) 个回合上统计得到，随机种子固定为 \(42\)。除成功率外，本文还统计以下指标：存活时间为回合实际持续时间除以 \(20\,\mathrm{s}\) 上限后得到的归一化值；净旋转圈数由相邻两帧物体四元数差分得到的轴向旋转角累加后除以 \(2\pi\) 得到；轴向平均角速度为存活期间未裁剪轴向角速度的时间平均值，单位为 \(\mathrm{rad/s}\)；物体平均线速度为位置差分估计速度的 \(L_1\) 范数均值，正文表格中换算为 \(\mathrm{cm/s}\)；平均关节命令力矩为仿真中控制器计算力矩的 \(L_1\) 范数均值。线速度和命令力矩越低通常表示控制过程越平稳，其余指标越高表示任务完成效果越好。需要说明的是，本文保留训练过程中的平均回报曲线用于说明单次训练的优化趋势；真正用于比较策略稳定性和泛化能力的是固定 checkpoint 在 \(128\) 个随机初始回合上的评测表和对比图。
+
+\subsection{仿真训练与评测}
+\thesisbodyfont
+本小节从仿真训练收敛、单回合行为和参数泛化三个角度分析两阶段算法的效果。首先需要确认第一阶段教师策略是否已经在当前任务建模、奖励设计和训练配置下形成稳定、持续的旋转技能。\(\mathrm{Teacher}\) 执行时依赖训练阶段特权信息，并不对应真实系统中的最终部署形式，但它提供了两阶段方法的技能上界，也是第二阶段适应训练的教师来源。只有第一阶段具备可靠旋转能力，后续关于本体历史适应和参数泛化的比较才有明确基准。
+
+图 \ref{fig:chapter4_stage1_reward} 给出了第一阶段教师策略的向量化 PPO 平均回报曲线。该曲线记录正式训练中并行环境批次的平均回报，用于观察优化过程的走向。曲线前段由负转正，随后持续抬升，并在后期稳定在较高水平，说明第三章的奖励设计能够为连续旋转提供清晰的优化信号，教师策略也从早期随机探索逐渐过渡到稳定的持续旋转。后文关于有效性和泛化性的判断，主要依据表 \ref{tab:chapter4_stage2_final_results} 中 \(128\) 个随机初始回合的固定 checkpoint 评测。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.70\textwidth]{assets/figures/chapter4/fig4-1_stage1_reward_curve.png}
+    \caption{第一阶段教师策略向量化 PPO 训练平均回报曲线}
+    \label{fig:chapter4_stage1_reward}
+\end{figure}
+
+平均回报只能反映总体优化趋势，无法单独说明策略学到的行为类型。图 \ref{fig:chapter4_stage1_core_metrics} 因此补充给出四个核心指标。轴向平均角速度在训练后期稳定到约 \(1.2\,\mathrm{rad/s}\)，对应持续绕目标轴产生的有效角运动，而非偶发姿态抖动。物体平均线速度始终较低，说明旋转收益并非来自剧烈甩动或大幅平移。掉落率在中后期快速降至接近零，实际回合时长也逐步逼近 \(20\,\mathrm{s}\) 上限，说明抓持稳定性和持续执行能力同步提高。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.70\textwidth]{assets/figures/chapter4/fig4-2_stage1_core_metrics.png}
+    \caption{第一阶段四个核心训练指标曲线}
+    \label{fig:chapter4_stage1_core_metrics}
+\end{figure}
+
+图 \ref{fig:chapter4_stage1_keyframes} 进一步展示了第一阶段教师策略在单回合执行中的关键帧。图中选取四个时间节点，并从不同视角给出对应时刻的手内旋转状态，同时标出了帧号和时间，便于对照。可以看到，策略在连续执行过程中始终维持住对圆柱体的包络，没有出现中途脱手或明显失稳，这与前面的高奖励和低掉落率是一致的。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.60\textwidth]{assets/figures/chapter4/fig4-3_stage1_success_keyframes.png}
+    \caption{第一阶段教师策略在不同时间节点与不同观察视角下的关键帧}
+    \label{fig:chapter4_stage1_keyframes}
+\end{figure}
+
+结合图 \ref{fig:chapter4_stage1_reward}、图 \ref{fig:chapter4_stage1_core_metrics} 和图 \ref{fig:chapter4_stage1_keyframes}，第一阶段教师策略已经形成稳定、连续且可复用的旋转技能先验。第一阶段验证的不只是训练收敛，还包括单回合播放层面的行为可解释性，由此为第二阶段可部署策略的训练与分析提供基础。
+
+在第一阶段获得稳定教师先验后，第二阶段只使用本体感觉历史训练可部署策略。原始第二阶段策略在 OOD 条件下仍出现明显退化，说明其对未见参数组合的外推并不充分。针对这一问题，本文加入定向增强，并将增强前策略记为 \(\mathrm{Deploy\text{-}Base}\)，增强后策略记为 \(\mathrm{Deploy\text{-}Refined}\)。
+
+对于第二阶段基策略 \(\mathrm{Deploy\text{-}Base}\)，由于训练时冻结教师动作主干，只更新历史编码器，总奖励波动比第一阶段更明显。图 \ref{fig:chapter4_stage2_base_reward} 展示了该策略的总奖励曲线：尽管存在局部起伏，平滑趋势仍从低回报逐步抬升，并最终进入与第一阶段后期接近的高回报区间。也就是说，仅保留可部署观测后，第二阶段策略已经能够形成可执行的连续旋转。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.70\textwidth]{assets/figures/chapter4/fig4-4_stage2_base_reward_curve.png}
+    \caption{第二阶段基策略总奖励曲线}
+    \label{fig:chapter4_stage2_base_reward}
+\end{figure}
+
+图 \ref{fig:chapter4_stage2_base_core_metrics} 进一步给出了 \(\mathrm{Deploy\text{-}Base}\) 的四个核心训练指标。从图中可以看到，轴向平均角速度持续上升并在训练后期稳定在约 \(1.1\,\mathrm{rad/s}\) 附近，物体平均线速度逐步回落到较低水平，表明策略已经能够在较为受控的手内区域建立持续旋转。与此同时，实际回合时长不断延长并接近 \(20\,\mathrm{s}\) 上限，潜变量重建误差也显著下降，表明历史编码器对教师技能先验的恢复在训练过程中逐步趋于稳定。
+
+\begin{figure}[!htbp]
+    \centering
+    \includegraphics[width=0.70\textwidth]{assets/figures/chapter4/fig4-5_stage2_base_core_metrics.png}
+    \caption{第二阶段基策略四个核心训练指标曲线}
+    \label{fig:chapter4_stage2_base_core_metrics}
+\end{figure}
+\newpage
+
+图 \ref{fig:chapter4_stage2_base_success_keyframes} 进一步给出了第二阶段基策略在单回合执行过程中的成功关键帧。图中同样选取了四个时间节点，并分别从不同观察视角展示对应时刻的手内旋转状态。从该组关键帧可以看到，\(\mathrm{Deploy\text{-}Base}\) 在标准圆柱体样本上能够较长时间保持对物体的稳定包络，并完成连续旋转过程。该结果表明，前述训练曲线与核心指标反映的收敛结果并非仅停留在统计量层面，而是能够在具体回合播放中体现为持续的旋转执行。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.60\textwidth]{assets/figures/chapter4/fig4-6_stage2_base_success_keyframes.png}
+    \caption{第二阶段基策略在不同时间节点与不同观察视角下的关键帧}
+    \label{fig:chapter4_stage2_base_success_keyframes}
+\end{figure}
+
+图 \ref{fig:chapter4_stage2_base_reward}、图 \ref{fig:chapter4_stage2_base_core_metrics} 与图 \ref{fig:chapter4_stage2_base_success_keyframes} 共同说明，第二阶段可部署基策略已经在训练收敛和单回合播放两个层面得到验证，能够依赖本体感觉历史完成较稳定的连续旋转执行。该结果也为后续分析其在偏置圆柱体条件下的退化现象提供了对比基线。
+
+当评测对象换成更难的偏置圆柱体时，\(\mathrm{Deploy\text{-}Base}\) 的退化更明显。图 \ref{fig:chapter4_stage2_base_keyframes} 的关键帧显示，策略在回合前段可以建立旋转，但随着执行推进，物体逐渐离开稳定接触区域，后段旋转连续性减弱，最终被挤出手内。该现象说明，仅依靠第二阶段原始训练分布和潜变量拟合目标，仍不足以覆盖偏置样本带来的接触变化。表 \ref{tab:appendix_privileged_info_ablation} 的特权信息类别消融也从另一侧说明，质心偏移对当前任务的接触稳定性影响更强，因此后续需要围绕偏置风险进行定向增强。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.60\textwidth]{assets/figures/chapter4/fig4-7_stage2_base_high_com_failure_keyframes.png}
+    \caption{第二阶段基策略在较大质心偏移条件下的关键帧}
+    \label{fig:chapter4_stage2_base_keyframes}
+\end{figure}
+
+基于此，后续评测将具体检验第三章提出的第二阶段增强能否在相同部署接口下改善 OOD 表现。具体来说，增强策略对应两处训练侧调整：放宽质心偏移样本覆盖，并加入教师——部署动作一致性约束。下面先比较三类策略在 ID/OOD 条件下的整体指标，再通过消融实验区分两项增强各自的作用。
+
+图 \ref{fig:chapter4_stage2_refined_eval_compare} 对比了 \(\mathrm{Teacher}\)、\(\mathrm{Deploy\text{-}Base}\) 和 \(\mathrm{Deploy\text{-}Refined}\) 在 ID 与 OOD 条件下的四项核心指标。ID 条件下，两条可部署策略已经接近 \(\mathrm{Teacher}\)，说明历史编码器基本恢复了教师侧技能先验。OOD 条件下，\(\mathrm{Deploy\text{-}Base}\) 与教师之间的差距明显拉大，而 \(\mathrm{Deploy\text{-}Refined}\) 在成功率、存活时间、净旋转圈数和轴向平均角速度上均有所恢复。该结果说明，第二阶段增强在不削弱分布内性能的前提下，缓解了参数外推带来的下降。
+
+\begin{figure}[!htbp]
+    \centering
+    \includegraphics[width=0.68\textwidth]{assets/figures/chapter4/fig4-8_stage2_id_ood_metrics_compare.png}
+    \caption{三种策略在 ID 和 OOD 条件下的核心评测指标对比}
+    \label{fig:chapter4_stage2_refined_eval_compare}
+\end{figure}
+\newpage
+
+图 \ref{fig:chapter4_stage2_refined_keyframes} 进一步给出了增强策略在较大质心偏移条件下的关键帧。与第二阶段基策略相比，\(\mathrm{Deploy\text{-}Refined}\) 在部分时段能够维持更长的受控接触并延缓明显失稳现象，表明动作一致性监督主导下的第二阶段增强在高风险样本上具有改善效果。结合统一评测主图与关键帧诊断，该增强的主要价值在于改善常规参数外推条件下的旋转表现，并为后续继续提升极端风险条件下的稳定性提供基础。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.60\textwidth]{assets/figures/chapter4/fig4-9_stage2_refined_high_com_keyframes.png}
+    \caption{改进第二阶段策略在较大质心偏移条件下的关键帧}
+    \label{fig:chapter4_stage2_refined_keyframes}
+\end{figure}
+
+表 \ref{tab:chapter4_stage2_final_results} 汇总了本文仿真评测部分最关键的定量结果。与图 \ref{fig:chapter4_stage2_refined_eval_compare} 相比，该表额外列出了物体平均线速度和平均关节命令力矩，因而能够同时比较任务完成率、任务持续性、旋转效率和控制平稳性。
+
+\begin{table}[htbp]
+    \centering
+    \zihao{6}
+    \caption{三种策略在 ID 和 OOD 条件下的核心评测结果}
+    \label{tab:chapter4_stage2_final_results}
+    \setlength{\tabcolsep}{3pt}
+    \renewcommand{\arraystretch}{1.08}
+    \resizebox{0.98\textwidth}{!}{
+    \begin{tabular}{l*{12}{c}}
+        \toprule
+        \multirow{2}{*}{策略} & \multicolumn{6}{c}{ID} & \multicolumn{6}{c}{OOD} \\
+        \cmidrule(lr){2-7}\cmidrule(lr){8-13}
+         & 成功率 \(\uparrow\) & 存活 \(\uparrow\) & 圈数 \(\uparrow\) & 角速度 \(\uparrow\) & 线速度 \(\downarrow\) & 力矩 \(\downarrow\) & 成功率 \(\uparrow\) & 存活 \(\uparrow\) & 圈数 \(\uparrow\) & 角速度 \(\uparrow\) & 线速度 \(\downarrow\) & 力矩 \(\downarrow\) \\
+        \midrule
+        教师策略 & \textbf{1.0000} & \textbf{0.9983} & 3.6950 & 1.1628 & \textbf{3.4478} & 2.3407 & \textbf{0.9766} & \textbf{0.9913} & \textbf{3.4684} & \textbf{1.0956} & \textbf{3.9620} & 2.4103 \\
+        部署基线 & 0.9922 & 0.9966 & 3.6309 & 1.1444 & 3.5378 & 2.3575 & 0.8750 & 0.9492 & 3.0422 & 0.9803 & 4.4935 & 2.4433 \\
+        增强部署 & \textbf{1.0000} & \textbf{0.9983} & \textbf{3.7081} & \textbf{1.1669} & 3.6543 & \textbf{2.3373} & 0.9141 & 0.9758 & 3.2558 & 1.0420 & 4.2818 & \textbf{2.4087} \\
+        \bottomrule
+    \end{tabular}
+    }
+    \par\vspace{0.3em}
+    \parbox{0.98\textwidth}{\zihao{6}注：存活为归一化存活时间；角速度单位为 \(\mathrm{rad/s}\)，线速度单位为 \(\mathrm{cm/s}\)，力矩为仿真关节命令力矩 \(L_1\) 均值。}
+\end{table}
+
+在 ID 条件下，三种策略都达到或接近满成功率，圆柱体训练分布内的连续旋转已经较为稳定。\(\mathrm{Deploy\text{-}Refined}\) 的 ID 成功率为 \(1.0000\)，轴向平均角速度为 \(1.1669\,\mathrm{rad/s}\)，平均力矩为 \(2.3373\)，在保持可部署观测约束的同时取得了与教师策略相当的旋转效率和控制代价。表中 \(\mathrm{Deploy\text{-}Refined}\) 在角速度和力矩等少数 ID 指标上略优于 \(\mathrm{Teacher}\)，主要与有限评测回合下的对象参数、初始状态采样差异以及动作一致性训练带来的局部动作平滑有关，不能简单理解为部署策略整体超过了带特权信息的教师策略。由此可判断，动作一致性约束和更宽质心分布没有削弱分布内性能。
+
+从 OOD 结果看，\(\mathrm{Deploy\text{-}Base}\) 的成功率由 ID 条件下的 \(0.9922\) 降至 \(0.8750\)，轴向平均角速度降至 \(0.9803\,\mathrm{rad/s}\)，并伴随更高的物体线速度和力矩，表明仅依赖潜变量重建的第二阶段基策略在未见参数组合下稳定性不足。\(\mathrm{Deploy\text{-}Refined}\) 将 OOD 成功率提升到 \(0.9141\)，归一化存活时间、净旋转圈数和轴向平均角速度也同步提升。相较 \(\mathrm{Deploy\text{-}Base}\)，其 OOD 线速度由 \(4.4935\,\mathrm{cm/s}\) 降至 \(4.2818\,\mathrm{cm/s}\)，平均力矩由 \(2.4433\) 降至 \(2.4087\)，表明成功率提升同时伴随更平稳的物体运动和更低的关节命令代价。若以 \(\mathrm{Teacher}\) 作为 OOD 参考上界，\(\mathrm{Deploy\text{-}Refined}\) 相比 \(\mathrm{Deploy\text{-}Base}\) 在成功率、归一化存活时间、净旋转圈数与轴向平均角速度上的上界差距分别收缩约 \(38.46\%\)、\(63.08\%\)、\(50.12\%\) 与 \(53.53\%\)。因此，本文最终采用的第二阶段增强策略在常规圆柱体 OOD 评测中显著缩小了部署策略与教师上界之间的差距。
+
+综合图 \ref{fig:chapter4_stage2_refined_eval_compare}、图 \ref{fig:chapter4_stage2_refined_keyframes} 与表 \ref{tab:chapter4_stage2_final_results}，第二阶段增强使可部署策略在圆柱体参数分布外条件下获得了更强的总体适应能力。为了进一步说明这种提升来自哪些具体设计，表 \ref{tab:chapter4_stage2_refined_ablation} 将第二阶段增强项拆分为质心分布放宽和动作一致性约束两部分进行对比。
+
+\begin{table}[htbp]
+    \centering
+    \zihao{5}
+    \caption{第二阶段增强设计的 OOD 消融结果}
+    \label{tab:chapter4_stage2_refined_ablation}
+    \setlength{\tabcolsep}{3pt}
+    \renewcommand{\arraystretch}{1.08}
+    \resizebox{\textwidth}{!}{
+    \begin{tabular}{p{0.25\textwidth}p{0.13\textwidth}p{0.13\textwidth}p{0.13\textwidth}p{0.13\textwidth}p{0.15\textwidth}}
+        \toprule
+        策略设置 & 成功率 \(\uparrow\) & 存活时间 \(\uparrow\) & 圈数 \(\uparrow\) & 角速度 \(\uparrow\) & 动作差异 \(\downarrow\) \\
+        \midrule
+        \(\mathrm{Deploy\text{-}Base}\) & 0.8750 & 0.9492 & 3.0422 & 0.9803 & -- \\
+        仅放宽质心分布 & 0.8750 & 0.9469 & 3.0312 & 0.9847 & 0.3929 \\
+        仅动作一致性约束 & 0.8906 & 0.9640 & 3.2001 & 1.0314 & 0.3635 \\
+        质心放宽 + 动作一致性 & \textbf{0.9141} & \textbf{0.9758} & \textbf{3.2558} & \textbf{1.0420} & \textbf{0.3053} \\
+        \bottomrule
+    \end{tabular}
+    }
+\end{table}
+
+表 \ref{tab:chapter4_stage2_refined_ablation} 表明，单独放宽质心偏移分布并未超过 \(\mathrm{Deploy\text{-}Base}\)，说明仅增加高风险样本并不足以保证历史编码器学到更可用的部署表征；单独加入动作一致性约束后，OOD 成功率提高到 \(0.8906\)，净旋转圈数和轴向平均角速度也同步提升；两项设计联合使用时，成功率进一步达到 \(0.9141\)，动作差异降至 \(0.3053\)。表 \ref{tab:appendix_action_loss_weight_sensitivity} 进一步比较了 \(\lambda_{\mathrm{act}}\in\{0,0.25,0.5,1.0,2.0\}\) 的候选设置，其中 \(\lambda_{\mathrm{act}}=1.0\) 在本组实验中取得最高 OOD 成功率并保持较低动作差距，因此本文将其作为最终增强策略的固定权重。总体来看，动作层面的教师——部署一致性是主要增益来源，更宽的质心分布则为联合训练提供额外的风险样本覆盖。
+
+\subsection{消融实验与设计选择分析}
+\thesisbodyfont
+
+\newcommand{\ablationcompacttable}{%
+    \zihao{5}%
+    \setlength{\tabcolsep}{3pt}%
+    \setlength{\aboverulesep}{0.35ex}%
+    \setlength{\belowrulesep}{0.35ex}%
+    \renewcommand{\arraystretch}{1.0}%
+}
+
+本小节汇总用于支撑关键设计选择的代表性消融实验。以下表格分别对应特权信息类别、技能先验中间表征、历史窗口长度、历史编码器结构和动作一致性权重；第二阶段增强项的组合消融已经在表 \ref{tab:chapter4_stage2_refined_ablation} 中给出，这里不再重复列出相同表格。
+
+表 \ref{tab:appendix_privileged_info_ablation} 汇总了特权信息消融在最终部署策略效果上的影响。该组实验固定第二阶段部署形式，主要研究第一阶段教师可使用的信息类别改变后，最终部署策略是否仍能形成可迁移的旋转能力。结果表明，去除物体位置、质量与摩擦或质心偏移都会削弱 OOD 表现，其中缺失质心偏移时的部署策略在 ID 与 OOD 条件下均未达到成功判据，表明当前任务对偏心引起的接触变化更为敏感。需要注意的是，该表并非九维特权信息的逐维完备消融，而是保留了三类与任务机制直接相关的代表性对照，用于解释第四章中偏置圆柱体条件下的退化现象。
+
+\begin{table}[H]
+    \centering
+    \ablationcompacttable
+    \caption{策略引入的特权信息消融结果}
+    \label{tab:appendix_privileged_info_ablation}
+    \resizebox{\textwidth}{!}{
+    \begin{tabular}{p{0.26\textwidth}>{\centering\arraybackslash}p{0.1\textwidth}>{\centering\arraybackslash}p{0.1\textwidth}>{\centering\arraybackslash}p{0.12\textwidth}>{\centering\arraybackslash}p{0.09\textwidth}>{\centering\arraybackslash}p{0.1\textwidth}>{\centering\arraybackslash}p{0.1\textwidth}>{\centering\arraybackslash}p{0.09\textwidth}}
+        \toprule
+        \multirow{2}{*}{部署策略设置} & ID & \multicolumn{6}{c}{OOD} \\
+        \cmidrule(lr){2-2}\cmidrule(lr){3-8}
+         & 成功率 \(\uparrow\) & 成功率 \(\uparrow\) & 存活时间 \(\uparrow\) & 圈数 \(\uparrow\) & 角速度 \(\uparrow\) & 线速度 \(\downarrow\) & 力矩 \(\downarrow\) \\
+        \midrule
+        完整特权信息 & \textbf{0.9922} & \textbf{0.8750} & \textbf{0.9492} & \textbf{3.0422} & \textbf{0.9803} & \textbf{4.4935} & \textbf{2.4433} \\
+        去除物体位置 & 0.9453 & 0.6172 & 0.7419 & 2.3078 & 0.9231 & 5.0319 & 4.1555 \\
+        去除质量与摩擦 & 0.9375 & 0.7344 & 0.8680 & 2.6264 & 0.9073 & 4.8292 & 2.5439 \\
+        去除质心偏移 & 0.0000 & 0.0000 & 0.2306 & 0.4247 & 0.5707 & 4.7125 & 2.9787 \\
+        \bottomrule
+    \end{tabular}
+    }
+\end{table}
+
+表 \ref{tab:appendix_direct_priv_ablation} 给出技能先验中间表征消融结果。该对照核心是比较特权信息进入策略主干前是否经过任务相关的中间表征映射。直接使用 \(9\) 维特权输入后，教师 OOD 成功率、部署 ID 成功率和部署 OOD 成功率均下降，部署侧角速度明显降低，线速度反而升高，表明原始物理参数直接拼接并没有自动带来更好的可部署策略。相较之下，\(9\mathrm{D}\rightarrow8\mathrm{D}\) 技能先验在当前网络规模和训练预算下起到了表征约束作用，使第一阶段动作主干条件和第二阶段历史监督目标保持在同一较稳定的先验空间中。
+
+\begin{table}[htbp]
+    \centering
+    \ablationcompacttable
+    \caption{技能先验中间表征消融结果}
+    \label{tab:appendix_direct_priv_ablation}
+    \resizebox{\textwidth}{!}{
+    \begin{tabular}{p{0.28\textwidth}>{\centering\arraybackslash}p{0.15\textwidth}>{\centering\arraybackslash}p{0.15\textwidth}>{\centering\arraybackslash}p{0.15\textwidth}>{\centering\arraybackslash}p{0.15\textwidth}>{\centering\arraybackslash}p{0.17\textwidth}}
+        \toprule
+        \multirow{2}{*}{表征设置} & ID & \multicolumn{4}{c}{OOD} \\
+        \cmidrule(lr){2-2}\cmidrule(lr){3-6}
+         & 部署成功率 \(\uparrow\) & 教师成功率 \(\uparrow\) & 部署成功率 \(\uparrow\) & 部署角速度 \(\uparrow\) & 部署线速度 \(\downarrow\) \\
+        \midrule
+         \(9\mathrm{D}\rightarrow8\mathrm{D}\) 技能先验 & \textbf{0.9922} & \textbf{0.9766} & \textbf{0.8750} & \textbf{0.9803} & \textbf{4.4935} \\
+        \(9\mathrm{D}\) 特权直接输入 & 0.7734 & 0.8672 & 0.5391 & 0.4005 & 5.0972 \\
+        \bottomrule
+    \end{tabular}
+    }
+\end{table}
+
+表 \ref{tab:appendix_history_length_ablation} 给出第二阶段历史长度消融结果。历史窗口的作用是让编码器从最近一段本体感觉响应中估计物体接触和动力学差异，因此过短可能缺少动态线索，过长则会增加输入冗余和部署缓存开销。结果显示，不同历史长度均能维持较高 ID 成功率，但 OOD 指标并不随窗口长度单调提高；\(25\) 帧在成功率、线速度和力矩上较好，\(30\) 帧则取得该组最高 OOD 旋转圈数和轴向角速度。本文因此采用 \(30\) 帧作为历史覆盖、旋转效率和部署开销之间的折中选择，并不意味着其为唯一最优的窗口长度，在各个方面都有最好的执行效果。
+
+\begin{table}[htbp]
+    \centering
+    \ablationcompacttable
+    \caption{第二阶段历史长度消融结果}
+    \label{tab:appendix_history_length_ablation}
+    \resizebox{\textwidth}{!}{
+    \begin{tabular}{>{\centering\arraybackslash}p{0.14\textwidth}>{\centering\arraybackslash}p{0.10\textwidth}>{\centering\arraybackslash}p{0.10\textwidth}>{\centering\arraybackslash}p{0.10\textwidth}>{\centering\arraybackslash}p{0.10\textwidth}>{\centering\arraybackslash}p{0.10\textwidth}>{\centering\arraybackslash}p{0.10\textwidth}}
+        \toprule
+        \multirow{2}{*}{历史长度} & ID & \multicolumn{5}{c}{OOD} \\
+        \cmidrule(lr){2-2}\cmidrule(lr){3-7}
+         & 成功率 \(\uparrow\) & 成功率 \(\uparrow\) & 圈数 \(\uparrow\) & 角速度 \(\uparrow\) & 线速度 \(\downarrow\) & 力矩 \(\downarrow\) \\
+        \midrule
+        \(25\) & \textbf{1.0000} & \textbf{0.9219} & 3.1900 & 1.0178 & \textbf{4.1640} & \textbf{2.3925} \\
+        \(28\) & 0.9688 & 0.8203 & 2.9729 & 0.9914 & 4.5477 & 2.4996 \\
+        \(30\) & 0.9922 & 0.8906 & \textbf{3.2301} & \textbf{1.0500} & 4.3687 & 2.4110 \\
+        \(35\) & 0.9922 & 0.8594 & 3.0883 & 1.0039 & 4.5418 & 2.4156 \\
+        \(40\) & 0.9766 & 0.9063 & 3.1772 & 1.0265 & 4.3824 & 2.4103 \\
+        \(45\) & 0.9922 & 0.8906 & 3.1374 & 1.0093 & 4.3431 & 2.4081 \\
+        \bottomrule
+    \end{tabular}
+    }
+\end{table}
+
+表 \ref{tab:appendix_encoder_structure_ablation} 给出历史编码器结构消融结果。Flatten-MLP 将历史窗口直接展平，虽然实现简单，但较难显式利用相邻时刻之间的局部变化，因此其 OOD 成功率、先验误差和动作差距均落后于时序结构。1D-CNN 在先验误差、动作差距和 OOD 角速度上表现最好，表明局部时序模式已经能提供有效的适应线索；GRU 在本次单种子评测中取得更高成功率，但角速度和动作对齐指标未超过 1D-CNN。综合并行推理便利性、部署端无需维护递归隐状态以及旋转效率，本文采用一维时序卷积作为默认历史编码器，同时保留递归结构作为后续优化方向。
+
+\begin{table}[htbp]
+    \centering
+    \ablationcompacttable
+    \caption{第二阶段编码器结构消融结果}
+    \label{tab:appendix_encoder_structure_ablation}
+    \begin{tabular}{p{0.16\textwidth}>{\centering\arraybackslash}p{0.10\textwidth}>{\centering\arraybackslash}p{0.10\textwidth}>{\centering\arraybackslash}p{0.10\textwidth}>{\centering\arraybackslash}p{0.10\textwidth}>{\centering\arraybackslash}p{0.12\textwidth}>{\centering\arraybackslash}p{0.12\textwidth}}
+        \toprule
+        \multirow{2}{*}{编码器结构} & ID & \multicolumn{5}{c}{OOD} \\
+        \cmidrule(lr){2-2}\cmidrule(lr){3-7}
+         & 成功率 \(\uparrow\) & 成功率 \(\uparrow\) & 角速度 \(\uparrow\) & 力矩 \(\downarrow\) & 先验误差 \(\downarrow\) & 动作差距 \(\downarrow\) \\
+        \midrule
+        Flatten-MLP & 0.9688 & 0.7969 & 0.9036 & \textbf{2.3930} & 0.2285 & 0.4597 \\
+        1D-CNN & 0.9922 & 0.8906 & \textbf{1.0500} & 2.4110 & \textbf{0.1242} & \textbf{0.3018} \\
+        GRU & \textbf{1.0000} & \textbf{0.9141} & 1.0176 & 2.3972 & 0.1273 & 0.3147 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+正文表 \ref{tab:chapter4_stage2_refined_ablation} 已经给出第二阶段增强项的组合消融，说明动作一致性约束与质心分布放宽联合使用时能够将常规 OOD 成功率提高到 \(0.9141\)。在此基础上，表 \ref{tab:appendix_action_loss_weight_sensitivity} 进一步给出动作一致性损失权重消融结果。该组实验均使用更宽质心分布的第二阶段训练设置，仅改变 \(\lambda_{\mathrm{act}}\)，用于研究动作模仿项过弱或过强时对部署性能的影响。结果显示，较小权重虽然能够带来一定提升，但动作差距不一定降低；而当权重增大到 \(2.0\) 时，OOD 成功率反而下降，表明过强的一致性约束可能压缩历史编码器根据自身观测进行适应的空间。综合成功率、存活时间、旋转效率和动作差距，\(\lambda_{\mathrm{act}}=1.0\) 在本组对比中均最优，因此本文采用该权重作为最终实验设置。
+
+\begin{table}[htbp]
+    \centering
+    \ablationcompacttable
+    \caption{动作一致性损失权重消融结果}
+    \label{tab:appendix_action_loss_weight_sensitivity}
+    \resizebox{\textwidth}{!}{
+    \begin{tabular}{>{\centering\arraybackslash}p{0.12\textwidth}>{\centering\arraybackslash}p{0.11\textwidth}>{\centering\arraybackslash}p{0.11\textwidth}>{\centering\arraybackslash}p{0.12\textwidth}>{\centering\arraybackslash}p{0.11\textwidth}>{\centering\arraybackslash}p{0.12\textwidth}>{\centering\arraybackslash}p{0.12\textwidth}}
+        \toprule
+        \multirow{2}{*}{\(\lambda_{\mathrm{act}}\)} & ID & \multicolumn{5}{c}{OOD} \\
+        \cmidrule(lr){2-2}\cmidrule(lr){3-7}
+         & 成功率 \(\uparrow\) & 成功率 \(\uparrow\) & 存活时间 \(\uparrow\) & 圈数 \(\uparrow\) & 角速度 \(\uparrow\) & 动作差距 \(\downarrow\) \\
+        \midrule
+        \(0\) & 0.9766 & 0.8750 & 0.9469 & 3.0312 & 0.9847 & 0.3929 \\
+        \(0.25\) & \textbf{1.0000} & 0.8828 & 0.9551 & 3.1595 & 1.0099 & 0.4317 \\
+        \(0.5\) & 0.9922 & 0.8906 & 0.9417 & 3.1117 & 1.0092 & 0.4594 \\
+        \(1.0\) & \textbf{1.0000} & \textbf{0.9141} & \textbf{0.9758} & \textbf{3.2558} & \textbf{1.0420} & \textbf{0.3053} \\
+        \(2.0\) & \textbf{1.0000} & 0.8672 & 0.9483 & 3.0868 & 1.0049 & 0.3466 \\
+        \bottomrule
+    \end{tabular}
+    }
+\end{table}
+
+\subsection{实机部署与评估}
+\thesisbodyfont
+完成仿真评测后，本文将同一个 \(\mathrm{Deploy\text{-}Refined}\) checkpoint 直接迁移到真实 LEAP Hand。实机端不提供物体质量、摩擦、质心等训练期特权信息，策略只能读取关节位置、关节目标及其历史序列；底层仍按照第二章定义的相对关节目标增量执行位置控制。这里更关心两个实际问题：策略离开仿真后能否闭环运行，以及圆柱体和少量近圆柱对象会在哪些条件下失稳。全部实机测试均不针对单个物体重新训练，也不单独调整策略参数。
+
+为避免启动瞬间破坏接触，系统先用 \(5\,\mathrm{s}\) warmup 缓慢移动到初始抓取姿态，并在初始抓取中采用 \(0.10\) 的闭合系数。正式控制时，循环频率保持 \(30\,\mathrm{Hz}\)，动作尺度仍为 \(1/24\)，电机 \(P/D\) 增益分别设为 \(600\) 和 \(150\)，单电机电流限制为 \(400\,\mathrm{mA}\)，串口波特率为 \(4{,}000{,}000\)。程序加载历史编码器、冻结动作主干和训练阶段保存的归一化统计量后，用当前关节状态初始化短历史与 \(30\) 帧长历史缓存；随后每个控制周期更新本体历史、估计技能先验、输出相对关节目标增量，并在动作截断和关节限位后发送给电机。归一化统计量、历史填充方式、动作缩放和关节限位必须与训练阶段保持同一语义，否则仿真中已经收敛的策略在真实平台上也可能表现为动作幅值异常或接触迅速破坏。
+
+实机评测协议单独定义，避免与仿真统一评测指标混用。仿真成功率要求回合未掉落且净旋转角不少于一圈；实机每类对象进行 \(10\) 次试验、每次最长 \(20\,\mathrm{s}\)，若物体未因掉落、明显倾倒或卡棱提前失效，并产生可辨识的受控旋转，则记为成功。实机净旋转圈数由顶部标记或瓶身标签的方向变化人工估计，轴向角速度再由估计圈数和测试时长换算得到。因此，这里的圈数和角速度用于描述真实平台上的低速执行现象，不作为外部姿态传感器意义上的精确测量。
+
+图 \ref{fig:chapter4_real_objects} 列出了四个实机测试对象。对象按照难度递增排列：训练分布附近的标准圆柱体、尺寸外推的圆柱体、细高饮料瓶，以及带棱角的饮料瓶。前两个对象主要改变圆柱尺寸、质量和质心，第三个对象在近圆截面基础上增加长径比和瓶颈结构，第四个对象进一步引入纵向筋线和局部凹凸。这样的对象顺序把“圆柱参数变化”“近圆柱迁移”和“非圆截面接触”分开，便于观察策略从哪一类几何变化开始失效。
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.75\textwidth]{assets/figures/chapter4/fig4-10_real_objects.png}
+    \caption{实机部署测试对象集}
+    \label{fig:chapter4_real_objects}
+\end{figure}
+
+对象属性与定量结果如表 \ref{tab:chapter4_real_eval_results} 所示。
+
+\begin{table}[H]
+    \centering
+    \zihao{5}
+    \caption{实机部署对象物理属性与评估结果}
+    \label{tab:chapter4_real_eval_results}
+    \setlength{\tabcolsep}{3pt}
+    \renewcommand{\arraystretch}{1.08}
+    \resizebox{\textwidth}{!}{
+    \begin{tabular}{p{0.15\textwidth}p{0.21\textwidth}p{0.10\textwidth}p{0.13\textwidth}p{0.14\textwidth}p{0.20\textwidth}}
+        \toprule
+        对象 & 物理属性 & 成功次数  & 净旋转圈数 & 轴向角速度 & 失效模式  \\
+        \midrule
+        标准圆柱体 & PLA，直径 \(7.5\,\mathrm{cm}\)，高 \(7.5\,\mathrm{cm}\)，\(90\,\mathrm{g}\) & \(10/10\) & 约 \(0.5\) 圈 &  \(0.157\,\mathrm{rad/s}\) & 无明显失效  \\
+        尺寸外圆柱体 & PLA，直径 \(5.5\,\mathrm{cm}\)，高 \(7.5\,\mathrm{cm}\)，\(55\,\mathrm{g}\) & \(10/10\) & 约 \(1.0\) 圈 &  \(0.314\,\mathrm{rad/s}\) & 无明显失效  \\
+        细高饮料瓶 & PET，直径 \(5.8\,\mathrm{cm}\)，高 \(18.0\,\mathrm{cm}\)，\(30\,\mathrm{g}\) & \(8/10\) & 约 \(1.0\) 圈 &  \(0.314\,\mathrm{rad/s}\) & 少数次倾倒掉落  \\
+        带棱角饮料瓶 & PET，直径 \(6.6\,\mathrm{cm}\)，高 \(22.0\,\mathrm{cm}\)，\(38\,\mathrm{g}\)，带纵向棱角 & \(0/10\) & 未形成稳定净旋转 & -- & 卡棱导致推进中断  \\
+        \bottomrule
+    \end{tabular}
+    }
+    \par\vspace{0.3em}
+    \zihao{6}注：实机成功判据为 \(20\,\mathrm{s}\) 内未掉落、未明显倾倒或卡滞，并产生可辨识的受控旋转；该定义不同于仿真中的一圈净旋转成功标准。净旋转圈数和轴向角速度由视频标记人工估计得到。
+\end{table}
+
+表 \ref{tab:chapter4_real_eval_results} 显示，最终部署策略在两个 3D 打印圆柱体对象上均达到 \(100\%\) 的实机成功率，说明仿真中学到的圆柱体旋转技能可以转化为真实 LEAP Hand 上可重复的闭环行为。不过，真实旋转速度明显低于仿真：标准圆柱体在 \(20\,\mathrm{s}\) 内约转 \(0.5\) 圈，尺寸外圆柱体约转 \(1.0\) 圈。仿真和实机的名义控制频率都约为 \(30\,\mathrm{Hz}\)，所以速度下降不能简单归因于频率不同。更直接的限制来自真实执行链路：电机受到 \(400\,\mathrm{mA}\) 电流上限和保守 \(P/D\) 增益约束，关节跟踪存在滞后；3D 打印圆柱与指尖之间的摩擦、柔顺性和局部接触面积也难以与仿真完全一致；串口通信、关节背隙和接触微滑还会削弱短时本体历史中的动作——状态对应关系。因而，该角速度更适合作为真实平台低速闭环执行的观察量，而不宜与仿真旋转效率直接等价比较。
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.82\textwidth,trim=0 110 0 50,clip]{assets/figures/chapter4/fig4-11_real_standard_cylinder_keyframes.png}
+    \caption{标准圆柱体实机旋转关键帧}
+    \label{fig:chapter4_real_standard_cylinder}
+\end{figure}
+
+图 \ref{fig:chapter4_real_standard_cylinder} 给出了标准圆柱体的实机关键帧。圆柱体顶部标记在不同帧之间发生了可辨识的方向变化，说明策略确实推动物体绕竖直轴旋转；四指在整个过程中仍保持包络，没有出现明显张开、滑脱或被挤出手内区域的现象。对于几何尺寸接近训练对象、表面为硬质圆柱面的样本，本体历史适应策略可以在真实平台上维持低速连续旋转。
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.82\textwidth,trim=0 110 0 70,clip]{assets/figures/chapter4/fig4-12_real_small_cylinder_keyframes.png}
+    \caption{尺寸外圆柱体实机旋转关键帧}
+    \label{fig:chapter4_real_small_cylinder}
+\end{figure}
+
+图 \ref{fig:chapter4_real_small_cylinder} 展示了尺寸外圆柱体的执行过程。该对象直径更小，手指闭合后的接触半径随之改变，对接触位置和关节目标跟踪提出了额外要求。关键帧中，顶部标记产生了比标准圆柱体更大的方向变化，物体也基本保持在手掌中心附近，没有明显掉落。这与表 \ref{tab:chapter4_real_eval_results} 中约 \(1.0\) 圈的净旋转估计相一致，说明当前策略对圆柱尺寸变化具有一定适应能力。
+
+\begin{figure}[!htbp]
+    \centering
+    \includegraphics[width=0.78\textwidth,trim=0 70 0 30,clip]{assets/figures/chapter4/fig4-13_real_slender_bottle_keyframes.png}
+    \caption{细高饮料瓶实机旋转关键帧}
+    \label{fig:chapter4_real_slender_bottle}
+\end{figure}
+
+细高饮料瓶进一步引入了更高的长径比、PET 材料和瓶颈结构。图 \ref{fig:chapter4_real_slender_bottle} 中，瓶身标签方向发生变化，说明策略在近圆柱真实物品上仍能产生有效旋转趋势，并在多数试验中维持到 \(20\,\mathrm{s}\) 上限。相比两个 3D 打印圆柱体，细高瓶更容易出现上端摆动和整体倾斜，少量试验会因倾斜积累而掉落。因此，\(80\%\) 的成功率只能说明策略具备初步近圆柱实物迁移能力，稳定性仍弱于规则圆柱体。
+\newpage
+
+\begin{figure}[!htbp]
+    \centering
+    \includegraphics[width=0.78\textwidth,trim=0 90 0 30,clip]{assets/figures/chapter4/fig4-14_real_ribbed_bottle_keyframes.png}
+    \caption{带棱角饮料瓶实机卡棱关键帧}
+    \label{fig:chapter4_real_ribbed_bottle}
+\end{figure}
+
+带棱角饮料瓶暴露了当前方法的主要局限。图 \ref{fig:chapter4_real_ribbed_bottle} 中，手指能够完成初始抓持，也能对瓶身产生局部推动；但瓶身纵向筋线和凹凸结构会使接触点在旋转过程中发生突变，指尖容易从连续推动转变为抵住棱边。物体虽然有轻微旋转趋势，却难以形成持续的净位姿推进，\(10\) 次试验均未计为成功。也就是说，当前策略主要掌握的是圆柱或近圆柱表面上的连续接触迁移规律，对非圆截面和局部棱边结构的几何泛化仍然不足。
+
+综合来看，同一 \(\mathrm{Deploy\text{-}Refined}\) 策略可以在不引入真实物体特权参数、不针对单个对象重新训练的条件下，在真实 LEAP Hand 上闭环运行。标准圆柱体和尺寸外圆柱体的 \(100\%\) 成功率说明，仿真中学到的圆柱体连续旋转技能能够迁移到真实硬件，并形成可重复的受控旋转行为；细高饮料瓶的结果进一步显示出一定近圆柱迁移能力。带棱角饮料瓶上的卡棱失败则划出了当前方法的边界：策略尚不能稳定处理非圆截面和局部棱边导致的接触突变，因此还不能被解释为任意对象的稳定泛化旋转。
+
+\subsection{本章小结}
+\thesisbodyfont
+本章围绕 LEAP Hand 圆柱体连续手内旋转任务给出了实验设置、仿真结果与实机部署评估。第一阶段教师策略已经学到稳定的连续旋转技能；第二阶段原始可部署链路能够在仅依赖本体感觉历史的条件下完成连续旋转，而以教师——部署动作一致性为主、并辅以质心偏移分布放宽的增强策略，则把常规圆柱体 OOD 成功率提升到 \(0.9141\)，缓解了第二阶段退化。实机侧，同一 \(\mathrm{Deploy\text{-}Refined}\) 策略经过观测、历史、动作和电机控制侧的 Sim2Real 对齐后，能够在真实 LEAP Hand 上完成闭环部署，并在标准圆柱体、尺寸外圆柱体以及部分近圆柱真实对象上形成连续、可重复的受控旋转。真实速度低于仿真以及带棱角饮料瓶上的卡滞也说明，执行器动力学、接触物理和对象局部几何仍是后续提升真实泛化能力的关键限制。本文已经验证圆柱体连续旋转、圆柱体参数泛化与少量真实对象部署的可行性，更大范围的多物体稳定泛化仍留作后续工作。

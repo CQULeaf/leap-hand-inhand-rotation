@@ -1,0 +1,210 @@
+% 第二章 任务建模
+\thesischapterpage{2\quad 任务建模}
+
+\section{任务建模}
+\subsection{连续旋转任务定义与系统状态}
+\thesisbodyfont
+本文研究的是 LEAP Hand 对圆柱体的连续手内旋转控制。这里的“连续”不是把物体转到某个固定角度就结束，而是在不丢失抓持稳定性的前提下，让物体在回合持续时间内尽量保持同一旋转方向上的角运动。与一次性重定向不同，这个任务更关注一段时间内能否保持稳定、可控的角速度，因此策略目标并不是“到达某个离散姿态”，而是让旋转过程尽量平滑、持续，并避免掉落和过度控制。
+
+为了突出连续旋转本身，本文将主要对象限定为圆柱体。圆柱体具有明确主轴和相对规则的局部接触几何，可以在降低形状复杂度的同时保留多指协同、接触切换、摩擦不确定性和抓持稳定性等关键难点。该设定也与 HORA 一类手内旋转研究的基本思路一致：先在结构规整的对象上建立可训练的旋转控制系统，再讨论向更复杂对象迁移的可能性\cite{hora2022}。
+
+在仿真环境中，物体被初始化在 LEAP Hand 四指可形成稳定抓取的区域内，初始主轴与世界坐标系 \(z\) 轴基本对齐，策略随后以固定控制频率输出关节目标增量，驱动物体绕世界坐标系的 \(z\) 轴连续旋转。设离散控制时刻为 \(t\)，控制步长为 \(\Delta t=4/120\,\mathrm{s}\approx0.0333\,\mathrm{s}\)，目标旋转轴为
+\begin{equation}
+e_z = [0,0,1]^\top .
+\end{equation}
+则任务可以概括为：在给定回合时长内最大化物体沿 \(e_z\) 方向的累计旋转量，同时抑制掉落、过大关节运动和不必要的控制代价。由此得到的是一个以本体感觉输入为主、带有对象物理参数随机化的连续控制问题。
+
+\begin{figure}[!t]
+    \centering
+    \includegraphics[width=0.98\textwidth]{assets/figures/chapter2/fig2-1_task_modeling_final.png}
+    \caption{圆柱体连续手内旋转任务建模示意图}
+    \label{fig:chapter2_task_modeling}
+\end{figure}
+
+图 \ref{fig:chapter2_task_modeling} 总结了本文任务建模中最核心的变量。图中间展示了真实 LEAP Hand 抓持圆柱体的交互场景，右上角给出了长时回合中的优化目标。外层闭环则对应强化学习接口：策略输入由短时本体感觉历史堆叠而成，动作表示为 16 维关节目标增量，奖励由旋转收益、稳定性约束和控制代价共同组成，终止条件用于处理掉落或超时。需要说明的是，图中的圆柱体并不是单纯的几何简化，而是后续两阶段方法中技能先验学习的基础对象。
+
+\subsection{策略输入、特权信息与动作空间}
+\thesisbodyfont
+本文采用以本体感觉为主的观测形式。单帧本体感觉观测由归一化关节位置和当前关节目标位置组成，记为
+\begin{equation}
+o_t =
+\left[
+\tilde q_t,\;
+q_t^{\mathrm{tar}}
+\right]
+\in \mathbb{R}^{32}.
+\end{equation}
+其中，前 \(16\) 维为归一化关节位置 \(\tilde q_t\)，后 \(16\) 维为底层位置控制器跟踪的关节目标 \(q_t^{\mathrm{tar}}\)。关节位置归一化定义为
+\begin{equation}
+\tilde q_t
+=
+\frac{2q_t-q_{\max}-q_{\min}}{q_{\max}-q_{\min}},
+\end{equation}
+其中 \(q_{\min},q_{\max}\in\mathbb{R}^{16}\) 分别表示各关节的下界和上界。该观测不包含视觉、触觉或真实对象参数，因而与后续实机部署阶段能够直接读取的信息保持一致。
+
+教师策略的输入采用最近 \(3\) 个控制时刻的本体感觉堆叠：
+\begin{equation}
+O_t^\pi =
+\left[
+o_{t-2};o_{t-1};o_t
+\right]
+\in \mathbb{R}^{96}.
+\end{equation}
+这里的 \(96\) 维来自 \(3\times 32\)。短时历史可以提供接触趋势、关节变化和物体运动方向等时序信息，使策略在保持低维输入的同时仍能感知到动作后的状态变化。
+
+为了给两阶段学习提供额外监督，本文在训练阶段引入特权信息
+\begin{equation}
+\xi_t =
+\left[
+p_t^o,\rho,m,\mu,c^\top
+\right]^\top
+\in \mathbb{R}^{9}.
+\end{equation}
+其中 \(p_t^o\) 表示物体位置，\(\rho\) 为尺寸参数，\(m\) 为质量，\(\mu\) 为摩擦系数，\(c\) 为质心偏移。它们在仿真中可直接读取，但在真实部署时不作为策略输入，只在第一阶段训练和第二阶段的蒸馏过程中起作用。
+
+本文将第二阶段适应模块所用的历史窗口记为
+\begin{equation}
+h_t =
+\left[
+o_{t-29};o_{t-28};\ldots;o_t
+\right]
+\in \mathbb{R}^{30\times 32}.
+\end{equation}
+这一窗口长度在后续实验中固定使用，用来让历史编码器从较长的本体感觉序列中估计对象相关隐变量。
+
+策略输出为 \(16\) 维连续动作
+\begin{equation}
+a_t \in [-1,1]^{16}.
+\end{equation}
+它并不直接表示关节力矩，而是表示相对关节目标的增量。设上一控制时刻的关节目标为 \(q_{t-1}^{\mathrm{tar}}\)，动作缩放系数为 \(\alpha\)，则当前关节目标更新为
+\begin{equation}
+q_t^{\mathrm{tar}}=
+\operatorname{clip}\!\left(
+q_{t-1}^{\mathrm{tar}}+\alpha a_t,\;
+q_{\min}, q_{\max}
+\right).
+\end{equation}
+本文实现中取 \(\alpha=1/24\)，这意味着在动作取边界值时，单个控制周期内的目标增量约为 \(0.0417\,\mathrm{rad}\)。这种表示方式便于对接真实 LEAP Hand 的位置控制接口，也比直接输出力矩更稳定，更适合保持仿真和实机部署之间的动作语义一致。
+
+\subsection{旋转度量与奖励函数}
+\thesisbodyfont
+连续手内旋转的核心评价量是物体沿目标轴的角运动。本文用相邻两个时刻的四元数差分表示物体姿态增量：
+\begin{equation}
+\Delta Q_t =
+Q_t^o \otimes (Q_{t-1}^o)^{-1},
+\end{equation}
+其中 \(\otimes\) 表示四元数乘法。再将姿态增量映射为轴角向量
+\begin{equation}
+\phi_t = \operatorname{Log}(\Delta Q_t),
+\end{equation}
+即可得到当前控制步长内的平均角速度估计
+\begin{equation}
+\hat{\omega}_t^o = \frac{\phi_t}{\Delta t}.
+\end{equation}
+沿目标轴的旋转速度定义为
+\begin{equation}
+\omega_t^{\parallel} = e_z^\top \hat{\omega}_t^o .
+\end{equation}
+本文只奖励世界坐标系 \(z\) 轴上的净旋转，因为任务目标是围绕竖直轴持续旋转；若将倾斜或平移也计入收益，策略可能利用非目标运动获得回报，却没有形成稳定的轴向旋转。
+
+为了避免瞬时角速度过大对训练造成干扰，旋转奖励采用截断形式：
+\begin{equation}
+r_t^{\mathrm{rot}}
+=
+\lambda_{\mathrm{rot}}
+\operatorname{clip}\!\left(
+\omega_t^{\parallel},\;
+r_{\min}, r_{\max}
+\right),
+\end{equation}
+其中 \(\lambda_{\mathrm{rot}}>0\) 为旋转奖励权重，\(r_{\min}\) 和 \(r_{\max}\) 为角速度截断阈值。总奖励则写成
+\begin{equation}
+r_t
+=
+r_t^{\mathrm{rot}}
++ r_t^{\mathrm{pose}}
++ r_t^{\mathrm{lin}}
++ r_t^{\tau}
++ r_t^{\mathrm{work}}
++ r_t^{a}
++ r_t^{\mathrm{center}}.
+\end{equation}
+其中，姿态偏离惩罚用于抑制初始抓持姿态的大幅偏移：
+\begin{equation}
+r_t^{\mathrm{pose}}
+=
+-\lambda_q \|q_t-q_0\|_2^2.
+\end{equation}
+物体线速度惩罚写为
+\begin{equation}
+\hat v_t^o = \frac{p_t^o-p_{t-1}^o}{\Delta t},
+\qquad
+r_t^{\mathrm{lin}}
+=
+-\lambda_v \|\hat v_t^o\|_1.
+\end{equation}
+关节力矩和关节功率惩罚分别为
+\begin{equation}
+r_t^{\tau}
+=
+-\lambda_{\tau}\|\tau_t\|_2^2,
+\end{equation}
+\begin{equation}
+r_t^{\mathrm{work}}
+=
+-\lambda_w(\tau_t^\top \dot q_t)^2.
+\end{equation}
+动作幅值惩罚定义为
+\begin{equation}
+r_t^{a}
+=
+-\lambda_a\|a_t\|_2^2.
+\end{equation}
+最后，针对质心偏移带来的掉落风险，本文引入中间位置惩罚
+\begin{equation}
+d_t = \|p_t^o-p_c\|_2,
+\qquad
+r_t^{\mathrm{center}}
+=
+-\lambda_c
+\left[
+\operatorname{clip}\!\left(
+\frac{d_t}{d_{\mathrm{fall}}},\;
+0,1
+\right)
+\right]^2.
+\end{equation}
+其中 \(p_c\) 为物体中心参考位置，\(d_{\mathrm{fall}}=0.07\,\mathrm{m}\) 为允许的最大中心偏移距离。
+
+这些奖励项分别对应任务中的不同约束：旋转奖励给出优化方向，姿态和线速度惩罚维持抓持稳定性，力矩、功率和动作幅值惩罚限制控制代价，中间位置惩罚主要用于降低掉落风险。通过这组分量，连续旋转目标被拆解为可学习、可调节的若干约束；各项奖励权重及角速度截断阈值的具体取值将在第4.1节实验设置中给出。
+
+\subsection{终止条件与优化目标}
+\thesisbodyfont
+本文将物体中心偏移视为主要失败判据。若物体中心相对参考位置的距离超过阈值 \(d_{\mathrm{fall}}\)，则认为物体已经脱离手内可控区域；若回合达到最大时长 \(T\)，则回合自然结束。终止条件写为
+\begin{equation}
+\mathrm{done}_t =
+\mathbb{I}
+\left[
+d_t \ge d_{\mathrm{fall}}
+\;\lor\;
+t \ge T
+\right],
+\end{equation}
+其中 \(\mathbb{I}[\cdot]\) 为指示函数。后续仿真和实机评测统一采用 \(20\,\mathrm{s}\) 的回合时长，以便不同策略之间保持一致的时间尺度。
+
+基于上述状态、观测、动作和奖励定义，连续手内旋转任务可以写成一个离散时间马尔可夫决策过程。设策略为 \(\pi(a_t|O_t^\pi)\)，折扣因子为 \(\gamma\)，则策略优化目标为
+\begin{equation}
+\pi^\ast
+=
+\arg\max_{\pi}
+\mathbb{E}_{\pi}
+\left[
+\sum_{t=0}^{T-1}
+\gamma^t r_t
+\right].
+\end{equation}
+该目标并非单纯追求更大的瞬时旋转速度，而是要求策略在整个回合内保持稳定、持续且可执行的旋转行为。本章建模结果为第三章的两阶段学习算法提供统一的任务、观测和奖励基础。
+
+\subsection{本章小结}
+\thesisbodyfont
+本章对 LEAP Hand 圆柱体连续手内旋转任务进行了形式化建模，依次定义任务对象、目标旋转轴、控制步长、系统状态、策略观测、训练期特权信息和相对关节目标动作空间，并给出轴向旋转量计算方式、奖励函数、终止条件和策略优化目标。这些定义为后续算法设计和实验验证提供统一基础。

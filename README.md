@@ -1,9 +1,9 @@
 # 基于深度强化学习的 LEAP Hand 手内旋转系统
 
-该仓库实现了 HORA 风格的两阶段策略学习流程：先训练带特权信息的仿真 teacher policy，再训练只依赖本体感知历史的可部署 student policy。项目打通了“任务建模——仿真训练——实机部署”整个流程，本仓库开源所有相关代码，可用于仿真实验复现、定量评估和真实硬件部署。
+本项目实现了 HORA 风格的两阶段策略学习流程在 LEAP Hand 低成本灵巧手上的应用与增强：先训练带特权信息的仿真 teacher policy，再训练只依赖本体感知历史的可部署 student policy。项目打通了“任务建模——仿真训练——实机部署”整个流程。本仓库开源所有相关代码，可用于仿真实验复现、定量评估和真实硬件部署。
 
-[[Website](https://yexuhang.com/projects/)]
-[[Paper](https://arxiv.org/abs/2210.04887)]
+视频展示：[[Website](https://yexuhang.com/projects/)]
+论文展示：[[Paper](https://github.com/CQULeaf/leap-hand-inhand-rotation/blob/main/paper/main.pdf)]
 
 ## 项目亮点
 
@@ -30,17 +30,17 @@ source/LEAP_Isaaclab/
   LEAP_Isaaclab/deployment_scripts/
                             # Stage2 policy wrapper 与 Dynamixel 控制器
 docker/                     # Isaac Lab 容器入口
+paper/                      # 论文以及相应的LaTeX源码
 ```
 
 ## 环境要求
 
 项目所用环境：
 
-- Ubuntu 22.04
-- NVIDIA GPU
-- Isaac Sim `5.1.0.0`
-- Isaac Lab `0.54.3`
-- `isaaclab_tasks 0.11.14`、`isaaclab_assets 0.2.4`、`isaaclab_rl 0.5.0`
+- Ubuntu 22.04 LTS
+- NVIDIA GeForce RTX 5060 Laptop GPU
+- Isaac Sim `5.1.0`
+- Isaac Lab `2.3.0`
 - Conda 环境名：`env_isaaclab`
 - Isaac Lab 环境内 Python `3.11.15`
 

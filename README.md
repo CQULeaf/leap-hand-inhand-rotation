@@ -2,7 +2,7 @@
 
 本项目实现了 HORA 风格的两阶段策略学习流程在 LEAP Hand 低成本灵巧手上的应用与增强：先训练带特权信息的仿真 teacher policy，再训练只依赖本体感知历史的可部署 student policy。项目打通了“任务建模——仿真训练——实机部署”整个流程。本仓库开源所有相关代码，可用于仿真实验复现、定量评估和真实硬件部署。
 
-视频展示：[[Website](https://yexuhang.com/projects/)]
+视频展示：[[Website](https://yexuhang.com/projects/leap-hand-inhand-rotation/)]
 论文展示：[[Paper](https://github.com/CQULeaf/leap-hand-inhand-rotation/blob/main/paper/main.pdf)]
 
 ## 项目亮点

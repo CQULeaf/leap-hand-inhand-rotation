@@ -14,4 +14,5 @@ Build with:
 latexmk -xelatex main.tex
 ```
 
-The compiled PDF is `main.pdf`.
+The compiled `main.pdf` is intentionally not committed in this repository.
+The public web version is hosted at <https://yexuhang.com/projects/leap-hand-inhand-rotation/paper/>.
